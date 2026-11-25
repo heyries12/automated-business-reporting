@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -27,6 +28,10 @@ class GenerateReportRequest(BaseModel):
         except OverflowError as error:
             raise ValueError("The previous comparison period is out of range") from error
         return self
+
+
+class GenerateRecordsReportRequest(GenerateReportRequest):
+    records: list[dict[str, Any]]
 
 
 class Metrics(BaseModel):

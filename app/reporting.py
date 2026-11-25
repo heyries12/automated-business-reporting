@@ -17,7 +17,7 @@ def get_path(value: Any, path: str) -> Any:
     return current
 
 
-def _parse_datetime(value: Any) -> datetime | None:
+def parse_datetime(value: Any) -> datetime | None:
     if isinstance(value, datetime):
         parsed = value
     elif isinstance(value, str) and value.strip():
@@ -55,7 +55,7 @@ def calculate_metrics(
     invalid_records = 0
 
     for record in records:
-        occurred_at = _parse_datetime(get_path(record, date_field))
+        occurred_at = parse_datetime(get_path(record, date_field))
         if not occurred_at or not (period_start <= occurred_at < period_end):
             invalid_records += 1
             continue

@@ -45,6 +45,8 @@ class BusinessApiClient:
         self, period_start: datetime, period_end: datetime
     ) -> list[dict[str, Any]]:
         settings = self.settings
+        if not settings.business_api_base_url:
+            raise ValueError("BUSINESS_API_BASE_URL is required for REST-source reports")
         url = (
             f"{settings.business_api_base_url.rstrip('/')}"
             f"/{settings.business_api_path.lstrip('/')}"

@@ -26,7 +26,9 @@ for (const [source, connectionTypes] of Object.entries(workflow.connections)) {
 
 const expectedEdges = [
   ['Daily Schedule', 0, 'Build Daily Period'],
-  ['Build Daily Period', 0, 'Generate Report'],
+  ['Build Daily Period', 0, 'Read Business Data'],
+  ['Read Business Data', 0, 'Prepare Records Request'],
+  ['Prepare Records Request', 0, 'Generate Report'],
   ['Generate Report', 0, 'Validate Report'],
   ['Validate Report', 0, 'Find Existing Report'],
   ['Find Existing Report', 0, 'Already Delivered?'],
@@ -58,6 +60,10 @@ const lookup = nodesByName.get('Find Existing Report');
 assert.equal(lookup.parameters.operation, 'read');
 assert.equal(lookup.alwaysOutputData, true);
 assert.match(lookup.parameters.filtersUI.values[0].lookupValue, /report_key/);
+const sourceSheet = nodesByName.get('Read Business Data');
+assert.equal(sourceSheet.parameters.operation, 'read');
+assert.equal(sourceSheet.parameters.sheetName.value, 'Business Data');
+assert.equal(sourceSheet.alwaysOutputData, true);
 
 const buildPeriod = new Function(nodesByName.get('Build Daily Period').parameters.jsCode);
 const periodItems = buildPeriod();
@@ -67,6 +73,25 @@ assert.equal(
   24 * 60 * 60 * 1000,
 );
 assert.match(periodItems[0].json.recipient_email, /REPLACE_WITH_REPORT_RECIPIENT/);
+
+const prepareRecords = new Function(
+  '$input',
+  '$',
+  nodesByName.get('Prepare Records Request').parameters.jsCode,
+);
+const prepared = prepareRecords(
+  { all: () => [{ json: { created_at: '2026-11-24T10:00:00Z', amount: 25 } }] },
+  (name) => {
+    assert.equal(name, 'Build Daily Period');
+    return { first: () => periodItems[0] };
+  },
+);
+assert.equal(prepared[0].json.records.length, 1);
+assert.equal(prepared[0].json.period_start, periodItems[0].json.period_start);
+
+const generateNode = nodesByName.get('Generate Report');
+assert.match(generateNode.parameters.url, /generate-from-records$/);
+assert.match(generateNode.parameters.body, /records/);
 
 const sheetRow = Object.fromEntries(csvHeaders.map((header) => [header, '']));
 Object.assign(sheetRow, {

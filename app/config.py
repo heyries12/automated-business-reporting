@@ -96,8 +96,6 @@ class Settings:
         missing = []
         if not self.service_api_key:
             missing.append("SERVICE_API_KEY")
-        if not self.business_api_base_url:
-            missing.append("BUSINESS_API_BASE_URL")
         if self.ai_enabled and not self.openai_api_key:
             missing.append("OPENAI_API_KEY (or set AI_ENABLED=false)")
         if missing:

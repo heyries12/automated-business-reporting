@@ -1,5 +1,5 @@
 {
-  "name": "Automated Daily Business Reporting",
+  "name": "Automated Daily Business Reporting from Google Sheets",
   "nodes": [
     {
       "parameters": {
@@ -32,14 +32,50 @@
     },
     {
       "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Business Data",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb114",
+      "name": "Read Business Data",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [-470, 180],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const period = $('Build Daily Period').first().json;\nconst records = $input.all()\n  .map((item) => item.json)\n  .filter((row) => Object.keys(row).length > 0);\n\nif (!records.length) {\n  throw new Error('The Business Data sheet has no rows.');\n}\n\nreturn [{\n  json: {\n    report_name: period.report_name,\n    recipient_email: period.recipient_email,\n    period_start: period.period_start,\n    period_end: period.period_end,\n    records,\n  },\n}];"
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb115",
+      "name": "Prepare Records Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-230, 180]
+    },
+    {
+      "parameters": {
         "method": "POST",
-        "url": "http://reporting-api:8000/v1/reports/generate",
+        "url": "https://REPLACE_WITH_PUBLIC_API_URL/v1/reports/generate-from-records",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendBody": true,
         "contentType": "raw",
         "rawContentType": "application/json",
-        "body": "={{ JSON.stringify({ report_name: $json.report_name, period_start: $json.period_start, period_end: $json.period_end }) }}",
+        "body": "={{ JSON.stringify({ report_name: $json.report_name, period_start: $json.period_start, period_end: $json.period_end, records: $json.records }) }}",
         "options": {
           "timeout": 360000,
           "response": {
@@ -53,7 +89,7 @@
       "name": "Generate Report",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.5,
-      "position": [-410, 180]
+      "position": [10, 180]
     },
     {
       "parameters": {
@@ -65,7 +101,7 @@
       "name": "Validate Report",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-160, 180]
+      "position": [250, 180]
     },
     {
       "parameters": {
@@ -99,7 +135,7 @@
       "name": "Find Existing Report",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.7,
-      "position": [70, 180],
+      "position": [490, 180],
       "alwaysOutputData": true
     },
     {
@@ -131,7 +167,7 @@
       "name": "Already Delivered?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [310, 180]
+      "position": [730, 180]
     },
     {
       "parameters": {
@@ -143,7 +179,7 @@
       "name": "Build Generated Row",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [550, 260]
+      "position": [970, 260]
     },
     {
       "parameters": {
@@ -200,7 +236,7 @@
       "name": "Log Generated Report",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.7,
-      "position": [800, 260]
+      "position": [1220, 260]
     },
     {
       "parameters": {
@@ -217,7 +253,7 @@
       "name": "Send Report Email",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
-      "position": [1050, 260]
+      "position": [1470, 260]
     },
     {
       "parameters": {
@@ -229,7 +265,7 @@
       "name": "Build Delivered Row",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1300, 260]
+      "position": [1720, 260]
     },
     {
       "parameters": {
@@ -286,11 +322,11 @@
       "name": "Mark Report Delivered",
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.7,
-      "position": [1550, 260]
+      "position": [1970, 260]
     },
     {
       "parameters": {
-        "content": "## Setup required\n1. Set the recipient in **Build Daily Period**.\n2. Set the reporting API URL in **Generate Report**.\n3. Add an n8n Header Auth credential: `X-API-Key`.\n4. Connect Google Sheets OAuth2 on all three Sheet nodes.\n5. Connect Gmail OAuth2 on **Send Report Email**.\n6. Test manually before activating.",
+        "content": "## Setup required\n1. Create `Business Data` and `Report Log` tabs in one spreadsheet.\n2. Set the recipient in **Build Daily Period**.\n3. Set the public reporting API URL and Header Auth credential.\n4. Connect Google Sheets OAuth2 on all four Sheet nodes.\n5. Connect Gmail OAuth2 on **Send Report Email**.\n6. Test manually before activating.",
         "height": 420,
         "width": 430,
         "color": 5
@@ -303,7 +339,7 @@
     },
     {
       "parameters": {
-        "content": "## Reliability behavior\n- `report_key` is stable for the report name and UTC period.\n- Existing delivered keys stop before another email is sent.\n- The first Sheet upsert records generation before email delivery.\n- The second upsert marks the same row delivered only after Gmail succeeds.\n- Raw business records stay inside the Python service.\n- The workflow imports inactive and runs daily at 08:00 UTC.",
+        "content": "## Reliability behavior\n- Business rows are sent only to the secured reporting API.\n- `report_key` is stable for the report name and UTC period.\n- Existing delivered keys stop before another email is sent.\n- The first Sheet upsert records generation before email delivery.\n- The second upsert marks the same row delivered only after Gmail succeeds.\n- The workflow imports inactive and runs daily at 08:00 UTC.",
         "height": 380,
         "width": 430,
         "color": 3
@@ -320,6 +356,12 @@
       "main": [[{"node":"Build Daily Period","type":"main","index":0}]]
     },
     "Build Daily Period": {
+      "main": [[{"node":"Read Business Data","type":"main","index":0}]]
+    },
+    "Read Business Data": {
+      "main": [[{"node":"Prepare Records Request","type":"main","index":0}]]
+    },
+    "Prepare Records Request": {
       "main": [[{"node":"Generate Report","type":"main","index":0}]]
     },
     "Generate Report": {

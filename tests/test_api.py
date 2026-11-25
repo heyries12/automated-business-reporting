@@ -74,3 +74,52 @@ def test_generate_report_returns_email_and_sheet_row(monkeypatch):
     assert "<html" in report["email_html"].lower()
     assert "24 Nov 2026 to 24 Nov 2026" in report["email_html"]
     get_settings.cache_clear()
+
+
+def test_generate_report_from_sheet_records_without_business_api(monkeypatch):
+    monkeypatch.setenv("SERVICE_API_KEY", "test-service-key")
+    monkeypatch.setenv("BUSINESS_API_BASE_URL", "")
+    monkeypatch.setenv("AI_ENABLED", "false")
+    monkeypatch.setenv("REPORT_SUCCESS_STATUSES", "paid")
+    get_settings.cache_clear()
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/reports/generate-from-records",
+            headers={"X-API-Key": "test-service-key"},
+            json={
+                "report_name": "Daily Sheet Report",
+                "period_start": "2026-11-24T00:00:00Z",
+                "period_end": "2026-11-25T00:00:00Z",
+                "records": [
+                    {
+                        "created_at": "2026-11-24T10:00:00Z",
+                        "amount": "250.00",
+                        "status": "paid",
+                        "customer_id": "customer-1",
+                        "category": "Services",
+                    },
+                    {
+                        "created_at": "2026-11-23T10:00:00Z",
+                        "amount": "200.00",
+                        "status": "paid",
+                        "customer_id": "customer-1",
+                        "category": "Services",
+                    },
+                    {
+                        "created_at": "2026-10-01T10:00:00Z",
+                        "amount": "999.00",
+                        "status": "paid",
+                        "customer_id": "customer-2",
+                        "category": "Other",
+                    },
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    report = response.json()
+    assert report["metrics"]["total_revenue"] == 250.0
+    assert report["previous_metrics"]["total_revenue"] == 200.0
+    assert report["trends"]["revenue_change_pct"] == 25.0
+    get_settings.cache_clear()

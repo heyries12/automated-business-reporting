@@ -12,12 +12,19 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from app.clients import AiClient, BusinessApiClient
 from app.config import Settings
 from app.models import (
+    GenerateRecordsReportRequest,
     GenerateReportRequest,
     ReportResponse,
     SheetRow,
 )
 from app.rendering import render_email
-from app.reporting import calculate_metrics, calculate_trends, deterministic_summary
+from app.reporting import (
+    calculate_metrics,
+    calculate_trends,
+    deterministic_summary,
+    get_path,
+    parse_datetime,
+)
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -69,14 +76,77 @@ async def generate_report(
                 source.fetch_records(period_start_dt, period_end_dt),
                 source.fetch_records(previous_start, previous_end),
             )
-        metric_options = {
-            "date_field": settings.date_field,
-            "amount_field": settings.amount_field,
-            "status_field": settings.status_field,
-            "customer_field": settings.customer_field,
-            "category_field": settings.category_field,
-            "success_statuses": settings.success_statuses,
-        }
+    except httpx.HTTPStatusError as error:
+        logger.warning("Upstream API returned status %s", error.response.status_code)
+        raise HTTPException(status_code=502, detail="An upstream API request failed") from error
+    except (httpx.HTTPError, ValueError) as error:
+        logger.warning("Report generation failed: %s", error)
+        raise HTTPException(status_code=502, detail="Report source data is unavailable or invalid") from error
+    except TimeoutError as error:
+        logger.warning("Report generation exceeded its configured deadline")
+        raise HTTPException(status_code=504, detail="Report generation timed out") from error
+
+    return await build_report_response(
+        request, settings, current_records, previous_records
+    )
+
+
+@app.post(
+    "/v1/reports/generate-from-records",
+    response_model=ReportResponse,
+    dependencies=[Depends(require_api_key)],
+)
+async def generate_report_from_records(
+    request: GenerateRecordsReportRequest,
+    settings: Settings = Depends(get_settings),
+) -> ReportResponse:
+    if len(request.records) > settings.max_records:
+        raise HTTPException(
+            status_code=413,
+            detail=f"The request exceeds the {settings.max_records} record limit",
+        )
+
+    period_start = request.period_start.astimezone(timezone.utc)
+    period_end = request.period_end.astimezone(timezone.utc)
+    duration = period_end - period_start
+    previous_start = period_start - duration
+    current_records = []
+    previous_records = []
+
+    for record in request.records:
+        occurred_at = parse_datetime(get_path(record, settings.date_field))
+        if occurred_at is None:
+            current_records.append(record)
+        elif period_start <= occurred_at < period_end:
+            current_records.append(record)
+        elif previous_start <= occurred_at < period_start:
+            previous_records.append(record)
+
+    return await build_report_response(
+        request, settings, current_records, previous_records
+    )
+
+
+async def build_report_response(
+    request: GenerateReportRequest,
+    settings: Settings,
+    current_records: list[dict],
+    previous_records: list[dict],
+) -> ReportResponse:
+    period_start_dt = request.period_start.astimezone(timezone.utc)
+    period_end_dt = request.period_end.astimezone(timezone.utc)
+    duration = period_end_dt - period_start_dt
+    previous_start = period_start_dt - duration
+    previous_end = period_start_dt
+    metric_options = {
+        "date_field": settings.date_field,
+        "amount_field": settings.amount_field,
+        "status_field": settings.status_field,
+        "customer_field": settings.customer_field,
+        "category_field": settings.category_field,
+        "success_statuses": settings.success_statuses,
+    }
+    try:
         metrics = calculate_metrics(
             current_records,
             period_start_dt,
@@ -87,15 +157,9 @@ async def generate_report(
             previous_records, previous_start, previous_end, **metric_options
         )
         trends = calculate_trends(metrics, previous_metrics)
-    except httpx.HTTPStatusError as error:
-        logger.warning("Upstream API returned status %s", error.response.status_code)
-        raise HTTPException(status_code=502, detail="An upstream API request failed") from error
-    except (httpx.HTTPError, ValueError) as error:
-        logger.warning("Report generation failed: %s", error)
-        raise HTTPException(status_code=502, detail="Report source data is unavailable or invalid") from error
-    except TimeoutError as error:
-        logger.warning("Report generation exceeded its configured deadline")
-        raise HTTPException(status_code=504, detail="Report generation timed out") from error
+    except ValueError as error:
+        logger.warning("Report records could not be aggregated: %s", error)
+        raise HTTPException(status_code=422, detail="Report records are invalid") from error
 
     if settings.ai_enabled:
         try:
