@@ -1,0 +1,9 @@
+{
+  "name": "automated-business-reporting",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Validation utilities for the automated business reporting workflow",
+  "scripts": {
+    "test": "node tests/validate-workflow.js"
+  }
+}

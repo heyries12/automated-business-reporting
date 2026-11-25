@@ -1,0 +1,1 @@
+"""Automated business reporting service."""

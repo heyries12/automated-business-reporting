@@ -1,0 +1,361 @@
+{
+  "name": "Automated Daily Business Reporting",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb101",
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-900, 180]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const reportName = 'Daily Business Report';\nconst recipientEmail = 'REPLACE_WITH_REPORT_RECIPIENT@example.com';\n\nconst now = new Date();\nconst periodEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));\nconst periodStart = new Date(periodEnd.getTime() - 24 * 60 * 60 * 1000);\n\nreturn [{\n  json: {\n    report_name: reportName,\n    recipient_email: recipientEmail,\n    period_start: periodStart.toISOString(),\n    period_end: periodEnd.toISOString(),\n  },\n}];"
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb102",
+      "name": "Build Daily Period",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-660, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://reporting-api:8000/v1/reports/generate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ report_name: $json.report_name, period_start: $json.period_start, period_end: $json.period_end }) }}",
+        "options": {
+          "timeout": 360000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb103",
+      "name": "Generate Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [-410, 180]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const report = $json;\nconst required = ['report_key', 'email_subject', 'email_html', 'sheet_row', 'summary_mode'];\nfor (const field of required) {\n  if (report[field] === undefined || report[field] === null || report[field] === '') {\n    throw new Error(`Report response is missing ${field}`);\n  }\n}\n\nconst row = report.sheet_row;\nif (row.report_key !== report.report_key) {\n  throw new Error('Report and Sheet row keys do not match');\n}\nfor (const field of ['total_revenue', 'total_transactions', 'completed_transactions', 'average_order_value', 'unique_customers']) {\n  if (typeof row[field] !== 'number' || !Number.isFinite(row[field])) {\n    throw new Error(`Invalid numeric field: ${field}`);\n  }\n}\nif (!String(report.email_html).toLowerCase().includes('<html')) {\n  throw new Error('Report email_html is not an HTML document');\n}\n\nreturn { json: report };"
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb104",
+      "name": "Validate Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-160, 180]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Report Log",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "report_key",
+              "lookupValue": "={{ $('Validate Report').first().json.report_key }}"
+            }
+          ]
+        },
+        "combineFilters": "AND",
+        "options": {
+          "returnFirstMatch": true
+        }
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb112",
+      "name": "Find Existing Report",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [70, 180],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "03a769fc-b1f8-45ea-b9cc-4290d6dc5b54",
+              "leftValue": "={{ $json.delivery_status || '' }}",
+              "rightValue": "delivered",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": false,
+        "options": {}
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb113",
+      "name": "Already Delivered?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [310, 180]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const report = $('Validate Report').first().json;\nreturn {\n  json: {\n    ...report.sheet_row,\n    delivery_status: 'generated',\n    delivered_at: '',\n  },\n};"
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb105",
+      "name": "Build Generated Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [550, 260]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Report Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": ["report_key"],
+          "schema": [
+            {"id":"report_key","displayName":"report_key","required":false,"defaultMatch":true,"display":true,"type":"string","canBeUsedToMatch":true},
+            {"id":"generated_at","displayName":"generated_at","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"report_name","displayName":"report_name","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"period_start","displayName":"period_start","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"period_end","displayName":"period_end","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"currency","displayName":"currency","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"total_revenue","displayName":"total_revenue","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"revenue_change_pct","displayName":"revenue_change_pct","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"total_transactions","displayName":"total_transactions","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"transactions_change_pct","displayName":"transactions_change_pct","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"completed_transactions","displayName":"completed_transactions","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"average_order_value","displayName":"average_order_value","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"unique_customers","displayName":"unique_customers","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"top_category","displayName":"top_category","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"executive_summary","displayName":"executive_summary","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"highlights","displayName":"highlights","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"risks","displayName":"risks","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"recommendations","displayName":"recommendations","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"summary_mode","displayName":"summary_mode","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"delivery_status","displayName":"delivery_status","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"delivered_at","displayName":"delivered_at","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false}
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW",
+          "handlingExtraData": "error",
+          "useAppend": false
+        }
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb106",
+      "name": "Log Generated Report",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [800, 260]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Build Daily Period').first().json.recipient_email }}",
+        "subject": "={{ $('Validate Report').first().json.email_subject }}",
+        "emailType": "html",
+        "message": "={{ $('Validate Report').first().json.email_html }}",
+        "options": {}
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb107",
+      "name": "Send Report Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [1050, 260]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "const report = $('Validate Report').first().json;\nreturn {\n  json: {\n    ...report.sheet_row,\n    delivery_status: 'delivered',\n    delivered_at: new Date().toISOString(),\n  },\n};"
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb108",
+      "name": "Build Delivered Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 260]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "sheet",
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Report Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": ["report_key"],
+          "schema": [
+            {"id":"report_key","displayName":"report_key","required":false,"defaultMatch":true,"display":true,"type":"string","canBeUsedToMatch":true},
+            {"id":"generated_at","displayName":"generated_at","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"report_name","displayName":"report_name","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"period_start","displayName":"period_start","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"period_end","displayName":"period_end","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"currency","displayName":"currency","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"total_revenue","displayName":"total_revenue","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"revenue_change_pct","displayName":"revenue_change_pct","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"total_transactions","displayName":"total_transactions","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"transactions_change_pct","displayName":"transactions_change_pct","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"completed_transactions","displayName":"completed_transactions","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"average_order_value","displayName":"average_order_value","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"unique_customers","displayName":"unique_customers","required":false,"defaultMatch":false,"display":true,"type":"number","canBeUsedToMatch":false},
+            {"id":"top_category","displayName":"top_category","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"executive_summary","displayName":"executive_summary","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"highlights","displayName":"highlights","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"risks","displayName":"risks","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"recommendations","displayName":"recommendations","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"summary_mode","displayName":"summary_mode","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"delivery_status","displayName":"delivery_status","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false},
+            {"id":"delivered_at","displayName":"delivered_at","required":false,"defaultMatch":false,"display":true,"type":"string","canBeUsedToMatch":false}
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "cellFormat": "RAW",
+          "handlingExtraData": "error",
+          "useAppend": false
+        }
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb109",
+      "name": "Mark Report Delivered",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [1550, 260]
+    },
+    {
+      "parameters": {
+        "content": "## Setup required\n1. Set the recipient in **Build Daily Period**.\n2. Set the reporting API URL in **Generate Report**.\n3. Add an n8n Header Auth credential: `X-API-Key`.\n4. Connect Google Sheets OAuth2 on all three Sheet nodes.\n5. Connect Gmail OAuth2 on **Send Report Email**.\n6. Test manually before activating.",
+        "height": 420,
+        "width": 430,
+        "color": 5
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb110",
+      "name": "Setup Required",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-900, -380]
+    },
+    {
+      "parameters": {
+        "content": "## Reliability behavior\n- `report_key` is stable for the report name and UTC period.\n- Existing delivered keys stop before another email is sent.\n- The first Sheet upsert records generation before email delivery.\n- The second upsert marks the same row delivered only after Gmail succeeds.\n- Raw business records stay inside the Python service.\n- The workflow imports inactive and runs daily at 08:00 UTC.",
+        "height": 380,
+        "width": 430,
+        "color": 3
+      },
+      "id": "7a8265e1-a0a1-47a4-889e-c0a31a9bb111",
+      "name": "Reliability Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [250, -380]
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [[{"node":"Build Daily Period","type":"main","index":0}]]
+    },
+    "Build Daily Period": {
+      "main": [[{"node":"Generate Report","type":"main","index":0}]]
+    },
+    "Generate Report": {
+      "main": [[{"node":"Validate Report","type":"main","index":0}]]
+    },
+    "Validate Report": {
+      "main": [[{"node":"Find Existing Report","type":"main","index":0}]]
+    },
+    "Find Existing Report": {
+      "main": [[{"node":"Already Delivered?","type":"main","index":0}]]
+    },
+    "Already Delivered?": {
+      "main": [[], [{"node":"Build Generated Row","type":"main","index":0}]]
+    },
+    "Build Generated Row": {
+      "main": [[{"node":"Log Generated Report","type":"main","index":0}]]
+    },
+    "Log Generated Report": {
+      "main": [[{"node":"Send Report Email","type":"main","index":0}]]
+    },
+    "Send Report Email": {
+      "main": [[{"node":"Build Delivered Row","type":"main","index":0}]]
+    },
+    "Build Delivered Row": {
+      "main": [[{"node":"Mark Report Delivered","type":"main","index":0}]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC"
+  },
+  "active": false,
+  "versionId": "9e402cc2-0391-42d0-a77e-a7f5ef077ad8",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

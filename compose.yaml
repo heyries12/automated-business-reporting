@@ -1,0 +1,7 @@
+services:
+  reporting-api:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
